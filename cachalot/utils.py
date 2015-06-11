@@ -23,8 +23,16 @@ from .signals import post_invalidation
 WRITE_COMPILERS = (SQLInsertCompiler, SQLUpdateCompiler, SQLDeleteCompiler)
 
 
-class RandomQueryException(Exception):
-    pass
+class DontCacheQuery(Exception):
+    """The given query should not be cached."""
+
+
+class RandomQueryException(DontCacheQuery):
+    """The query contains a random selector."""
+
+
+class BlacklistedTable(DontCacheQuery):
+    """The query is on a blacklisted table."""
 
 
 def get_query_cache_key(compiler):
@@ -111,8 +119,14 @@ def _get_tables(query, db_alias):
         sql = query.get_compiler(db_alias).as_sql()[0].lower()
         additional_tables = _get_tables_from_sql(connections[db_alias], sql)
         tables.update(additional_tables)
-    return tables
 
+    blacklist = cachalot_settings.CACHALOT_BLACKLIST
+    if blacklist:
+        blacklisted_tables = blacklist.intersection(tables)
+        if blacklisted_tables:
+            raise BlacklistedTable()
+
+    return tables
 
 def _get_table_cache_keys(compiler):
     db_alias = compiler.using

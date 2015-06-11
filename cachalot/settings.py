@@ -8,6 +8,7 @@ class Settings(object):
     CACHALOT_INVALIDATE_RAW = True
     CACHALOT_QUERY_KEYGEN = 'cachalot.utils.get_query_cache_key'
     CACHALOT_TABLE_KEYGEN = 'cachalot.utils.get_table_cache_key'
+    CACHALOT_BLACKLIST = set()
 
     def __getattribute__(self, item):
         if hasattr(settings, item):

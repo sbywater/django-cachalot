@@ -25,7 +25,7 @@ from .cache import cachalot_caches
 from .settings import cachalot_settings
 from .utils import (
     _get_query_cache_key, _invalidate_tables,
-    _get_table_cache_keys, _get_tables_from_sql, RandomQueryException,
+    _get_table_cache_keys, _get_tables_from_sql, DontCacheQuery,
     WRITE_COMPILERS)
 
 
@@ -87,7 +87,7 @@ def _patch_compiler(original):
         try:
             cache_key = _get_query_cache_key(compiler)
             table_cache_keys = _get_table_cache_keys(compiler)
-        except (EmptyResultSet, RandomQueryException):
+        except (EmptyResultSet, DontCacheQuery):
             return execute_query_func()
 
         return _get_result_or_execute_query(
