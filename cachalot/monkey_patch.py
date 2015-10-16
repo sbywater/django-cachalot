@@ -49,7 +49,7 @@ def _get_result_or_execute_query(execute_query_func, cache_key,
         for k in new_table_cache_keys:
             d[k] = now
         cache.set_many(d, None)
-    elif cache_key in data:
+    elif data.get(cache_key) is not None:
         timestamp, result = data.pop(cache_key)
         table_times = data.values()
         if table_times and timestamp > max(table_times):
