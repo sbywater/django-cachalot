@@ -2,9 +2,12 @@
 
 from __future__ import unicode_literals
 import datetime
+from decimal import Decimal
 from hashlib import sha1
 from time import time
+from uuid import UUID
 
+from django import VERSION as django_version
 from django.db import connections
 from django.db.models.sql import Query
 from django.db.models.sql.where import ExtraWhere, SubqueryConstraint
@@ -13,32 +16,44 @@ from django.utils.six import text_type, binary_type
 
 from .settings import cachalot_settings
 from .signals import post_invalidation
+from .transaction import AtomicCache
+
+
+DJANGO_GTE_1_9 = django_version[:2] >= (1, 9)
 
 
 class UncachableQuery(Exception):
     pass
 
 
+TUPLE_OR_LIST = {tuple, list}
+
 CACHABLE_PARAM_TYPES = {
-    bool, int, binary_type, text_type, type(None),
-    datetime.date, datetime.time, datetime.datetime, datetime.timedelta,
+    bool, int, float, Decimal, binary_type, text_type, type(None),
+    datetime.date, datetime.time, datetime.datetime, datetime.timedelta, UUID,
 }
 
+UNCACHABLE_FUNCS = set()
+if DJANGO_GTE_1_9:
+    from django.db.models.functions import Now
+    from django.contrib.postgres.functions import TransactionNow
+    UNCACHABLE_FUNCS.update((Now, TransactionNow))
+
 try:
-    from psycopg2._range import (
-        NumericRange, DateRange, DateTimeRange, DateTimeTZRange)
+    from psycopg2.extras import (
+        NumericRange, DateRange, DateTimeRange, DateTimeTZRange, Inet, Json)
 except ImportError:
     pass
 else:
     CACHABLE_PARAM_TYPES.update((
-        NumericRange, DateRange, DateTimeRange, DateTimeTZRange))
+        NumericRange, DateRange, DateTimeRange, DateTimeTZRange, Inet, Json))
 
 
 def check_parameter_types(params):
     for p in params:
         cl = p.__class__
         if cl not in CACHABLE_PARAM_TYPES:
-            if cl is list or cl is tuple:
+            if cl in TUPLE_OR_LIST:
                 check_parameter_types(p)
             elif cl is dict:
                 check_parameter_types(p.items())
@@ -57,7 +72,7 @@ def get_query_cache_key(compiler):
     :arg compiler: A SQLCompiler that will generate the SQL query
     :type compiler: django.db.models.sql.compiler.SQLCompiler
     :return: A cache key
-    :rtype: str
+    :rtype: int
     """
     sql, params = compiler.as_sql()
     check_parameter_types(params)
@@ -74,7 +89,7 @@ def get_table_cache_key(db_alias, table):
     :arg table: Name of the SQL table
     :type table: str or unicode
     :return: A cache key
-    :rtype: str
+    :rtype: int
     """
     cache_key = '%s:%s' % (db_alias, table)
     return sha1(cache_key.encode('utf-8')).hexdigest()
@@ -104,12 +119,13 @@ def _find_subqueries(children):
             rhs = None
             if hasattr(child, 'rhs'):
                 rhs = child.rhs
-            elif child.__class__ is tuple:
-                rhs = child[-1]
-            if rhs.__class__ is Query:
+            rhs_class = rhs.__class__
+            if rhs_class is Query:
                 yield rhs
             elif hasattr(rhs, 'query'):
                 yield rhs.query
+            elif rhs_class in UNCACHABLE_FUNCS:
+                raise UncachableQuery
         if hasattr(child, 'children'):
             for grand_child in _find_subqueries(child.children):
                 yield grand_child
@@ -121,8 +137,7 @@ def _get_tables(query, db_alias):
 
     tables = set(query.table_map)
     tables.add(query.get_meta().db_table)
-    subquery_constraints = _find_subqueries(query.where.children
-                                            + query.having.children)
+    subquery_constraints = _find_subqueries(query.where.children)
     for subquery in subquery_constraints:
         tables.update(_get_tables(subquery, db_alias))
     if query.extra_select or hasattr(query, 'subquery') \
@@ -141,25 +156,23 @@ def _get_tables(query, db_alias):
 
 def _get_table_cache_keys(compiler):
     db_alias = compiler.using
-    tables = _get_tables(compiler.query, db_alias)
-    return [_get_table_cache_key(db_alias, t) for t in tables]
+    return [_get_table_cache_key(db_alias, t)
+            for t in _get_tables(compiler.query, db_alias)]
 
 
-def _invalidate_table_cache_keys(cache, table_cache_keys):
-    if hasattr(cache, 'to_be_invalidated'):
-        cache.to_be_invalidated.update(table_cache_keys)
+def _invalidate_tables(cache, db_alias, tables):
     now = time()
-    d = {}
-    for k in table_cache_keys:
-        d[k] = now
-    cache.set_many(d, None)
+    cache.set_many(
+        {_get_table_cache_key(db_alias, t): now for t in tables}, None)
+
+    if isinstance(cache, AtomicCache):
+        cache.to_be_invalidated.update(tables)
 
 
-def _invalidate_table(cache, write_compiler):
-    db_alias = write_compiler.using
+def _invalidate_table(cache, db_alias, table):
+    cache.set(_get_table_cache_key(db_alias, table), time(), None)
 
-    table = write_compiler.query.get_meta().db_table
-    table_cache_key = _get_table_cache_key(db_alias, table)
-    _invalidate_table_cache_keys(cache, (table_cache_key,))
-
-    post_invalidation.send(table, db_alias=db_alias)
+    if isinstance(cache, AtomicCache):
+        cache.to_be_invalidated.add(table)
+    else:
+        post_invalidation.send(table, db_alias=db_alias)

@@ -5,18 +5,15 @@ import os
 
 from django import VERSION as django_version
 
-
 DATABASES = {
     'sqlite3': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': 'cachalot.sqlite3',
     },
     'postgresql': {
-        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'cachalot',
         'USER': 'cachalot',
-        'HOST': 'localhost',
-        'PORT': '5432',
     },
     'mysql': {
         'ENGINE': 'django.db.backends.mysql',
@@ -24,6 +21,8 @@ DATABASES = {
         'USER': 'root',
     },
 }
+if django_version[:2] == (1, 8):
+    DATABASES['postgresql']['ENGINE'] = 'django.db.backends.postgresql_psycopg2'
 for alias in DATABASES:
     test_db_name = 'test_' + DATABASES[alias]['NAME']
     DATABASES[alias]['TEST'] = {'NAME': test_db_name}
@@ -43,7 +42,7 @@ CACHES = {
             # a compatible pickle version to avoid unpickling errors when
             # running a Python 2 test after a Python 3 test.
             'PICKLE_VERSION': 2,
-        }
+        },
     },
     'memcached': {
         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
@@ -65,7 +64,7 @@ CACHES = {
         'LOCATION': '/tmp/django_cache',
         'OPTIONS': {
             'MAX_ENTRIES': 10e9,  # (See locmem)
-        }
+        },
     }
 }
 
@@ -91,17 +90,22 @@ INSTALLED_APPS = [
     'cachalot',
     'django.contrib.auth',
     'django.contrib.contenttypes',
+    'django.contrib.postgres',  # Enables the unaccent lookup.
 ]
-
-if django_version >= (1, 8):
-    INSTALLED_APPS.append(
-        'django.contrib.postgres',  # Enables the unaccent lookup.
-    )
 
 
 MIGRATION_MODULES = {
     'cachalot': 'cachalot.tests.migrations',
 }
+
+
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True,
+    },
+]
 
 
 MIDDLEWARE_CLASSES = ()

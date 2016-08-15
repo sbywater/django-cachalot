@@ -4,6 +4,9 @@ from __future__ import unicode_literals
 
 from django import VERSION as django_version
 from django.conf import settings
+from django.contrib.postgres.fields import (
+    ArrayField, HStoreField,
+    IntegerRangeField, FloatRangeField, DateRangeField, DateTimeRangeField)
 from django.db import models, migrations
 
 
@@ -25,7 +28,10 @@ class Migration(migrations.Migration):
                 ('datetime', models.DateTimeField(null=True, blank=True)),
                 ('owner', models.ForeignKey(blank=True, to=settings.AUTH_USER_MODEL, null=True)),
                 ('permission', models.ForeignKey(blank=True, to='auth.Permission', null=True)),
+                ('a_float', models.FloatField(null=True, blank=True)),
+                ('a_decimal', models.DecimalField(null=True, blank=True, max_digits=5, decimal_places=2)),
                 ('bin', models.BinaryField(null=True, blank=True)),
+                ('ip', models.GenericIPAddressField(null=True, blank=True)),
             ],
             options={
                 'ordering': ('name',),
@@ -47,14 +53,10 @@ class Migration(migrations.Migration):
             ],
             bases=('cachalot.testparent',),
         ),
-    ]
-
-if django_version >= (1, 8):
-    from django.contrib.postgres.fields import (
-        ArrayField, HStoreField,
-        IntegerRangeField, FloatRangeField, DateRangeField, DateTimeRangeField)
-
-    Migration.operations.extend((
+        migrations.AddField('Test', 'duration',
+                            models.DurationField(null=True, blank=True)),
+        migrations.AddField('Test', 'uuid',
+                            models.UUIDField(null=True, blank=True)),
         migrations.RunSQL('CREATE EXTENSION hstore;',
                           hints={'extension': 'hstore'}),
         migrations.RunSQL('CREATE EXTENSION unaccent;',
@@ -74,4 +76,12 @@ if django_version >= (1, 8):
                 ('datetime_range', DateTimeRangeField(null=True, blank=True)),
             ],
         ),
-    ))
+    ]
+
+
+if django_version[:2] >= (1, 9):
+    from django.contrib.postgres.fields import JSONField
+    Migration.operations.append(
+        migrations.AddField('PostgresModel', 'json',
+                            JSONField(null=True, blank=True))
+    )

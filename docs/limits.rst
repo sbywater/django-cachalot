@@ -40,10 +40,11 @@ if you execute queries returning more than 1 MB of data.
 
 To increase these limits, set the ``-I`` and ``-m`` arguments when starting
 memcached. If you use Ubuntu and installed the package, you can modify
-`/etc/memcached.conf`, add ``-I 10`` on a newline to set the limit
+`/etc/memcached.conf`, add ``-I 10m`` on a newline to set the limit
 per cache key to 10 MB, and if you want increase the already existing ``-m 64``
 to something like ``-m 1000`` to set the maximum cache size to 1 GB.
 
+.. _Locmem:
 
 Locmem
 ......
@@ -62,6 +63,8 @@ If you use range fields from `django.contrib.postgres` and your Django
 version is affected by this bug, you need to add the tables using range fields
 to :ref:`CACHALOT_UNCACHABLE_TABLES`.
 
+.. _MySQL:
+
 MySQL
 .....
 
@@ -72,7 +75,7 @@ Django-cachalot will slow down your queries if that query cache is enabled.
 If it’s not enabled, django-cachalot will make queries much faster.
 But you should probably better enable the query cache instead.
 
-.. _Raw queries limits:
+.. _Raw SQL queries:
 
 Raw SQL queries
 ...............
@@ -100,15 +103,43 @@ In such cases, you may want to partially disable this behaviour by
 After that, use :ref:`the API <API>` to manually invalidate the tables
 you modified.
 
-Multiple Servers
-................
+.. _Multiple servers:
+
+Multiple servers clock synchronisation
+......................................
 
 Django-cachalot relies on the computer clock to handle invalidation.
 If you deploy the same Django project on multiple machines,
-but with a centralized cache server, all the machines serving Django need
-to have their clocks as synchronized as possible.
+but with a centralised cache server, all the machines serving Django need
+to have their clocks as synchronised as possible.
 Otherwise, invalidations will happen with a latency from one server to another.
 A difference of even a few seconds can be harmful, so double check this!
 
 To keep your clocks synchronised, use the
 `Network Time Protocol <http://en.wikipedia.org/wiki/Network_Time_Protocol>`_.
+
+Replication server
+..................
+
+If you use multiple databases where at least one is a replica of another,
+django-cachalot has no way to know that the replica is modified
+automatically, since it happens outside Django.
+The SQL queries cached for the replica will therefore not be invalidated,
+and you will see some stale queries results.
+
+To fix this problem, you need to tell django-cachalot to also invalidate
+the replica when the primary database is invalidated.
+Suppose your primary database has the ``'default'`` database alias
+in ``DATABASES``, and your replica has the ``'replica'`` alias.
+Use :ref:`the signal <Signal>` and :meth:`cachalot.api.invalidate` this way:
+
+.. code:: python
+
+    from cachalot.api import invalidate
+    from cachalot.signals import post_invalidation
+    from django.dispatch import receiver
+
+    @receiver(post_invalidation)
+    def invalidate_replica(sender, **kwargs):
+        if kwargs['db_alias'] == 'default':
+            invalidate(sender, db_alias='replica')

@@ -1,7 +1,8 @@
 -r requirements.txt
 
 psycopg2
-MySQL-python
+mysqlclient
 django-redis
 python-memcached
 pylibmc
+pytz

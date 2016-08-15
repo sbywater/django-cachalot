@@ -4,8 +4,8 @@ Quick start
 Requirements
 ............
 
-- Django 1.7 or 1.8
-- Python 2.7, 3.2, 3.3, or 3.4
+- Django 1.8, 1.9 or 1.10
+- Python 2.7, 3.3, 3.4, or 3.5
 - a cache configured as ``'default'`` with one of these backends:
 
   - `django-redis <https://github.com/niwibe/django-redis>`_
@@ -13,30 +13,34 @@ Requirements
     (using either python-memcached or pylibmc)
   - `filebased <https://docs.djangoproject.com/en/1.7/topics/cache/#filesystem-caching>`_
   - `locmem <https://docs.djangoproject.com/en/1.7/topics/cache/#local-memory-caching>`_
-    (but it’s not shared between processes, see :ref:`Limits`)
+    (but it’s not shared between processes, see :ref:`locmem limits <Locmem>`)
 
 - one of these databases:
 
   - PostgreSQL
   - SQLite
   - MySQL (but you probably don’t need django-cachalot in this case,
-    see :ref:`Limits`)
+    see :ref:`MySQL limits <MySQL>`)
 
 Usage
 .....
 
 #. ``pip install django-cachalot``
 #. Add ``'cachalot',`` to your ``INSTALLED_APPS``
-#. Be aware of :ref:`the few limits <limits>`
+#. If you use multiple servers with a common cache server,
+   :ref:`double check their clock synchronisation <multiple servers>`
+#. If you modify data outside Django
+   – typically after restoring a SQL database –, run
+   ``./manage.py invalidate_cachalot``
+#. Be aware of :ref:`the few other limits <limits>`
 #. If you use
    `django-debug-toolbar <https://github.com/django-debug-toolbar/django-debug-toolbar>`_,
    you can add ``'cachalot.panels.CachalotPanel',``
    to your ``DEBUG_TOOLBAR_PANELS``
-#. If you need to invalidate all django-cachalot cache keys from an external script
-   – typically after restoring a SQL database –, simply run
-   ``./manage.py invalidate_cachalot``
 #. Enjoy!
 
+
+.. _Settings:
 
 Settings
 ........
@@ -71,7 +75,7 @@ Settings
 
 :Default: ``True``
 :Description: If set to ``False``, disables automatic invalidation on raw
-              SQL queries – read :ref:`Raw queries limits` for more info
+              SQL queries – read :ref:`raw queries limits <Raw SQL queries>` for more info
 
 
 ``CACHALOT_ONLY_CACHABLE_TABLES``
@@ -81,6 +85,10 @@ Settings
 :Description:
   Sequence of SQL table names that will be the only ones django-cachalot
   will cache. Only queries with a subset of these tables will be cached.
+  The sequence being empty (as it is by default) doesn’t mean that no table
+  can be cached: it disables this setting, so any table can be cache.
+  :ref:`CACHALOT_UNCACHABLE_TABLES` has more weight than this:
+  if you add a table to both settings, it will never be cached.
   Use a frozenset over other sequence types for a tiny performance boost.
 
 
@@ -135,6 +143,57 @@ For example:
     settings.CACHALOT_ENABLED = False
 
 
+.. _Template tag:
+
+Template tag
+............
+
+`Caching template fragments <https://docs.djangoproject.com/en/1.8/topics/cache/#template-fragment-caching>`_
+can be extremely powerful to speedup a Django application.  However, it often
+means you have to adapt your models to get a relevant cache key, typically
+by adding a timestamp that refers to the last modification of the object.
+
+But modifying your models and caching template fragments leads
+to stale contents most of the time. There’s a simple reason to that: we rarely
+only display the data from one model, we often want to display related data,
+such as the number of books written by someone, display a quote from a book
+of this author, display similar authors, etc. In such situations,
+**it’s impossible to cache template fragments and avoid stale rendered data**.
+
+Fortunately, django-cachalot provides an easy way to fix this issue,
+by simply checking when was the last time data changed in the given models
+or tables.  The API function
+:meth:`get_last_invalidation <cachalot.api.get_last_invalidation>` does that,
+and we provided a ``get_last_invalidation`` template tag to directly
+use it in templates.  It works exactly the same as the API function.
+
+Example of a quite heavy nested loop with a lot of SQL queries
+(considering no prefetch has been done)::
+
+    {% load cachalot cache %}
+
+    {% get_last_invalidation 'auth.User' 'library.Book' 'library.Author' as last_invalidation %}
+    {% cache 3600 short_user_profile last_invalidation %}
+      {{ user }} has borrowed these books:
+      {% for book in user.borrowed_books.all %}
+        <div class="book">
+          {{ book }} ({{ book.pages.count }} pages)
+          <span class="authors">
+            {% for author in book.authors.all %}
+              {{ author }}{% if not forloop.last %},{% endif %}
+            {% endfor %}
+          </span>
+        </div>
+      {% endfor %}
+    {% endcache %}
+
+``cache_alias`` and ``db_alias`` keywords arguments of this template tag
+are also available (see
+:meth:`cachalot.api.get_last_invalidation`).
+
+
+.. _Signal:
+
 Signal
 ......
 
@@ -144,6 +203,14 @@ just after a cache invalidation (when you modify something in a SQL table).
 ``db_alias`` explains which database is affected by the invalidation.
 Be careful when you specify ``sender``, as it is sensible to string type.
 To be sure, use ``Model._meta.db_table``.
+
+This signal is not directly triggered during transactions,
+it waits until the current transaction ends.  This signal is also triggered
+when invalidating using the API or the ``manage.py`` command.  Be careful
+when using multiple databases, if you invalidate all databases by simply
+calling ``invalidate()``, this signal will be triggered one time
+for each database and for each model.  If you have 3 databases and 20 models,
+``invalidate()`` will trigger the signal 60 times.
 
 Example:
 

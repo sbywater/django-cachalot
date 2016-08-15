@@ -1,6 +1,82 @@
 What’s new in django-cachalot?
 ==============================
 
+1.2.1
+-----
+
+**Mandatory update if you’re using django-cachalot 1.2.0.**
+
+This version reverts the cache keys hashing change from 1.2.0,
+as it was leading to a non-shared cache when Python used a random seed
+for hashing, which is the case by default on Python 3.3, 3.4, & 3.5,
+and also on 2.7 & 3.2 if you set ``PYTHONHASHSEED=random``.
+
+1.2.0
+-----
+
+**WARNING: This version is unsafe, it can lead to invalidation errors**
+
+- Adds Django 1.9 support
+- Simplifies and speeds up cache keys hashing
+- Documents how to use django-cachalot with a replica database
+- Adds ``DummyCache`` to ``VALID_CACHE_BACKENDS``
+- Updates the comparison with django-cache-machine & django-cacheops by
+  checking features and measuring performance instead of relying on their
+  documentations and a 2-years-ago experience of them
+
+1.1.0
+-----
+
+**Backwards incompatible changes:**
+
+- Adds Django 1.8 support and drops Django 1.6 & Python 2.6 support
+- Merges the 3 API functions ``invalidate_all``, ``invalidate_tables``,
+  & ``invalidate_models`` into a single ``invalidate`` function
+  while optimising it
+
+Other additions:
+
+- Adds a ``get_last_invalidation`` function to the API and the equivalent
+  template tag
+- Adds a ``CACHALOT_ONLY_CACHABLE_TABLES`` setting in order to make a whitelist
+  of the only table names django-cachalot can cache
+- Caches queries with IP addresses, floats, or decimals in parameters
+- Adds a Django check to ensure the project uses
+  compatible cache and database backends
+- Adds a lot of tests, especially to test django.contrib.postgres
+- Adds a comparison with django-cache-machine and django-cacheops
+  in the documentation
+
+Fixed:
+
+- Removes a useless extra invalidation during each write operation
+  to the database, leading to a small speedup
+  during data modification and tests
+- The ``post_invalidation`` signal was triggered during transactions
+  and was not triggered when using the API or raw write queries: both issues
+  are now fixed
+- Fixes a very unlikely invalidation issue occurring only when an error
+  occurred in a transaction after a transaction of another database nested
+  in the first transaction was committed, like this:
+
+  .. code:: python
+
+      from django.db import transaction
+
+      assert list(YourModel.objects.using('another_db')) == []
+
+      try:
+          with transaction.atomic():
+              with transaction.atomic('another_db'):
+                  obj = YourModel.objects.using('another_db').create(name='test')
+              raise ZeroDivisionError
+      except ZeroDivisionError:
+          pass
+
+      # Before django-cachalot 1.1.0, this assert was failing.
+      assert list(YourModel.objects.using('another_db')) == [obj]
+
+
 1.0.3
 -----
 

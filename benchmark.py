@@ -20,12 +20,12 @@ django.setup()
 
 from django.conf import settings
 from django.contrib.auth.models import User, Group
-from django.core.cache import get_cache
+from django.core.cache import caches
 from django.db import connections, connection
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils.encoding import force_text
 import matplotlib.pyplot as plt
-import MySQLdb
+import _mysql
 import pandas as pd
 import psycopg2
 
@@ -35,7 +35,26 @@ from cachalot.tests.models import Test
 
 
 RESULTS_PATH = 'benchmark/'
+DATA_PATH = '/var/lib/'
 CONTEXTS = ('Control', 'Cold cache', 'Hot cache')
+DIVIDER = 'divider'
+DISK_DATA_RE = re.compile(r'^MODEL="(.*)" MOUNTPOINT="(.*)"$')
+
+
+def get_disk_model_for_path(path):
+    out = force_text(check_output(['lsblk', '-Po', 'MODEL,MOUNTPOINT']))
+    mount_points = []
+    previous_model = None
+    for model, mount_point in [DISK_DATA_RE.match(line).groups()
+                               for line in out.split('\n') if line]:
+        if model:
+            previous_model = model.strip()
+        if mount_point:
+            mount_points.append((previous_model, mount_point))
+    mount_points = sorted(mount_points, key=lambda t: -len(t[1]))
+    for model, mount_point in mount_points:
+        if path.startswith(mount_point):
+            return model
 
 
 def write_conditions():
@@ -49,6 +68,9 @@ def write_conditions():
     with open('/proc/meminfo') as f:
         versions['RAM'] = re.search(r'^MemTotal:\s+(.+)$', f.read(),
                                     flags=re.MULTILINE).group(1)
+    versions.update((
+        ('Disk', get_disk_model_for_path(DATA_PATH)),
+    ))
     # OS
     linux_dist = ' '.join(platform.linux_distribution()).strip()
     if linux_dist:
@@ -58,8 +80,8 @@ def write_conditions():
 
     versions.update((
         ('Python', platform.python_version()),
-        ('Django', django.get_version()),
-        ('cachalot', cachalot.version_string),
+        ('Django', django.__version__),
+        ('cachalot', cachalot.__version__),
         ('sqlite', sqlite3.sqlite_version),
     ))
     # PostgreSQL
@@ -72,8 +94,8 @@ def write_conditions():
         cursor.execute('SELECT version();')
         versions['MySQL'] = cursor.fetchone()[0].split('-')[0]
     # Redis
-    out = force_text(check_output(['redis-cli',
-                                   'INFO', 'server'])).replace('\r', '')
+    out = force_text(
+        check_output(['redis-cli', 'INFO', 'server'])).replace('\r', '')
     versions['Redis'] = re.search(r'^redis_version:([\d\.]+)$', out,
                                   flags=re.MULTILINE).group(1)
     # memcached
@@ -83,7 +105,7 @@ def write_conditions():
 
     versions.update((
         ('psycopg2', psycopg2.__version__.split()[0]),
-        ('MySQLdb', MySQLdb.__version__),
+        ('mysqlclient', _mysql.__version__),
     ))
 
     with io.open(os.path.join('benchmark', 'conditions.rst'), 'w') as f:
@@ -92,7 +114,7 @@ def write_conditions():
                 'under the following conditions:\n\n' % Benchmark.n)
 
         def write_table_sep(char='='):
-            f.write(''.ljust(20, char) + ' ' + ''.ljust(50, char) + '\n')
+            f.write((char * 20) + ' ' + (char * 50) + '\n')
         write_table_sep()
         for k, v in versions.items():
             f.write(k.ljust(20) + ' ' + v + '\n')
@@ -174,7 +196,7 @@ class Benchmark(object):
             self.db_vendor = connections[self.db_alias].vendor
             print('Benchmarking %s…' % self.db_vendor)
             for cache_alias in settings.CACHES:
-                cache = get_cache(cache_alias)
+                cache = caches[cache_alias]
                 self.cache_name = cache.__class__.__name__[:-5].lower()
                 with override_settings(CACHALOT_CACHE=cache_alias):
                     self.execute_benchmark()
@@ -234,16 +256,18 @@ class Benchmark(object):
             plt.gca().invert_yaxis()
             for row in axes:
                 for ax in row:
+                    ax.xaxis.grid(True)
                     ax.set_ylabel('')
                     ax.set_xlabel('Time (s)')
             plt.savefig(os.path.join(RESULTS_PATH, '%s_%s.svg' % (param, v)))
 
     def plot_general(self, param):
         plt.figure()
-        self.means.plot(kind='barh', xerr=self.errors, xlim=self.xlim)
-        plt.gca().invert_yaxis()
-        plt.ylabel('')
-        plt.xlabel('Time (s)')
+        ax = self.means.plot(kind='barh', xerr=self.errors, xlim=self.xlim)
+        ax.invert_yaxis()
+        ax.xaxis.grid(True)
+        ax.set_ylabel('')
+        ax.set_xlabel('Time (s)')
         plt.savefig(os.path.join(RESULTS_PATH, '%s.svg' % param))
 
 
@@ -261,6 +285,9 @@ def create_data(using):
 
 
 if __name__ == '__main__':
+    if not os.path.exists(RESULTS_PATH):
+        os.mkdir(RESULTS_PATH)
+
     write_conditions()
 
     old_db_names = {}
@@ -269,7 +296,7 @@ if __name__ == '__main__':
         old_db_names[alias] = conn.settings_dict['NAME']
         conn.creation.create_test_db(autoclobber=True)
 
-        print("Populating database '%s'…" % alias)
+        print("Populating %s…" % connections[alias].vendor)
         create_data(alias)
 
     Benchmark().run()

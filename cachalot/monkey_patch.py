@@ -11,13 +11,14 @@ from django.db.models.signals import post_migrate
 from django.db.models.sql.compiler import (
     SQLCompiler, SQLInsertCompiler, SQLUpdateCompiler, SQLDeleteCompiler)
 from django.db.transaction import Atomic, get_connection
+from django.utils.six import binary_type
 
 from .api import invalidate
 from .cache import cachalot_caches
 from .settings import cachalot_settings
 from .utils import (
-    _get_query_cache_key, _invalidate_table,
-    _get_table_cache_keys, _get_tables_from_sql, UncachableQuery)
+    _get_query_cache_key, _get_table_cache_keys, _get_tables_from_sql,
+    _invalidate_table, UncachableQuery, TUPLE_OR_LIST)
 
 
 WRITE_COMPILERS = (SQLInsertCompiler, SQLUpdateCompiler, SQLDeleteCompiler)
@@ -32,12 +33,8 @@ def _unset_raw_connection(original):
     return inner
 
 
-TUPLE_OR_LIST = (tuple, list)
-
-
-def _get_result_or_execute_query(execute_query_func, cache_key,
-                                 table_cache_keys):
-    cache = cachalot_caches.get_cache()
+def _get_result_or_execute_query(execute_query_func, cache,
+                                 cache_key, table_cache_keys):
     data = cache.get_many(table_cache_keys + [cache_key])
 
     new_table_cache_keys = set(table_cache_keys)
@@ -45,10 +42,7 @@ def _get_result_or_execute_query(execute_query_func, cache_key,
 
     if new_table_cache_keys:
         now = time()
-        d = {}
-        for k in new_table_cache_keys:
-            d[k] = now
-        cache.set_many(d, None)
+        cache.set_many({k: now for k in new_table_cache_keys}, None)
     elif data.get(cache_key) is not None:
         timestamp, result = data.pop(cache_key)
         table_times = data.values()
@@ -80,15 +74,21 @@ def _patch_compiler(original):
             return execute_query_func()
 
         return _get_result_or_execute_query(
-            execute_query_func, cache_key, table_cache_keys)
+            execute_query_func,
+            cachalot_caches.get_cache(db_alias=compiler.using),
+            cache_key, table_cache_keys)
 
     return inner
 
 
 def _patch_write_compiler(original):
     @wraps(original)
+    @_unset_raw_connection
     def inner(write_compiler, *args, **kwargs):
-        _invalidate_table(cachalot_caches.get_cache(), write_compiler)
+        db_alias = write_compiler.using
+        table = write_compiler.query.get_meta().db_table
+        _invalidate_table(cachalot_caches.get_cache(db_alias=db_alias),
+                          db_alias, table)
         return original(write_compiler, *args, **kwargs)
 
     return inner
@@ -107,6 +107,8 @@ def _patch_cursor():
             out = original(cursor, sql, *args, **kwargs)
             if getattr(cursor.db, 'raw', True) \
                     and cachalot_settings.CACHALOT_INVALIDATE_RAW:
+                if isinstance(sql, binary_type):
+                    sql = sql.decode('utf-8')
                 sql = sql.lower()
                 if 'update' in sql or 'insert' in sql or 'delete' in sql:
                     tables = _get_tables_from_sql(cursor.db, sql)
@@ -123,7 +125,7 @@ def _patch_atomic():
     def patch_enter(original):
         @wraps(original)
         def inner(self):
-            cachalot_caches.enter_atomic()
+            cachalot_caches.enter_atomic(self.using)
             original(self)
 
         return inner
@@ -133,8 +135,8 @@ def _patch_atomic():
         def inner(self, exc_type, exc_value, traceback):
             needs_rollback = get_connection(self.using).needs_rollback
             original(self, exc_type, exc_value, traceback)
-            cachalot_caches.exit_atomic(exc_type is None
-                                        and not needs_rollback)
+            cachalot_caches.exit_atomic(
+                self.using, exc_type is None and not needs_rollback)
 
         return inner
 

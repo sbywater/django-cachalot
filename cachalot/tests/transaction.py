@@ -2,7 +2,6 @@
 
 from __future__ import unicode_literals
 
-from django import VERSION as django_version
 from django.contrib.auth.models import User
 from django.db import connection, transaction
 from django.test import TransactionTestCase
@@ -12,7 +11,7 @@ from .models import Test
 
 class AtomicTestCase(TransactionTestCase):
     def setUp(self):
-        if django_version >= (1, 7) and connection.vendor == 'mysql':
+        if connection.vendor == 'mysql':
             # We need to reopen the connection or Django
             # will execute an extra SQL request below.
             connection.cursor()
@@ -137,13 +136,7 @@ class AtomicTestCase(TransactionTestCase):
 
     def test_unsuccessful_nested_read_atomic(self):
         is_sqlite = connection.vendor == 'sqlite'
-        if django_version[:2] == (1, 7):
-            # In Django 1.7, savepoints were not released after a rollback,
-            # leading to fewer queries (= the number of non-root
-            # transaction.atomic reverted in the whole process).
-            num_queries = 5 if is_sqlite else 4
-        else:
-            num_queries = 6 if is_sqlite else 5
+        num_queries = 6 if is_sqlite else 5
 
         with self.assertNumQueries(num_queries):
             with transaction.atomic():
@@ -178,13 +171,7 @@ class AtomicTestCase(TransactionTestCase):
 
     def test_unsuccessful_nested_write_atomic(self):
         is_sqlite = connection.vendor == 'sqlite'
-        if django_version[:2] == (1, 7):
-            # In Django 1.7, savepoints were not released after a rollback,
-            # leading to fewer queries (= the number of non-root
-            # transaction.atomic reverted in the whole process).
-            num_queries = 13 if is_sqlite else 12
-        else:
-            num_queries = 16 if is_sqlite else 15
+        num_queries = 16 if is_sqlite else 15
 
         with self.assertNumQueries(num_queries):
             with transaction.atomic():

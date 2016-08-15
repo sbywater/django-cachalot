@@ -7,8 +7,10 @@ from .monkey_patch import patch
 
 VALID_DATABASE_ENGINES = {
     'django.db.backends.sqlite3',
-    'django.db.backends.postgresql_psycopg2',
+    'django.db.backends.postgresql',
     'django.db.backends.mysql',
+    # TODO: Remove when we drop Django 1.8 support.
+    'django.db.backends.postgresql_psycopg2',
 
     # GeoDjango
     'django.contrib.gis.db.backends.spatialite',
@@ -24,6 +26,7 @@ VALID_DATABASE_ENGINES = {
 
 
 VALID_CACHE_BACKENDS = {
+    'django.core.cache.backends.dummy.DummyCache',
     'django.core.cache.backends.locmem.LocMemCache',
     'django.core.cache.backends.filebased.FileBasedCache',
     'django_redis.cache.RedisCache',
